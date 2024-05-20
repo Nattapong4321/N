@@ -1,1 +1,57 @@
+import pandas as pd
+import numpy as np
+import argparse
+from scipy.stats import pearsonr, norm
+
+def fisher_z_transform(r):
+    """
+    Perform Fisher's Z transformation.
+    """
+    return 0.5 * np.log((1 + r) / (1 - r))
+
+def calculate_p_value(r, n):
+    """
+    Calculate the p-value using Fisher's Z transformation.
+    """
+    z = fisher_z_transform(r)
+    se = 1 / np.sqrt(n - 3)
+    z_score = z / se
+    p_value = 2 * (1 - norm.cdf(abs(z_score)))  # Two-tailed test
+    return p_value
+
+def main(csv_file, alpha=0.05):
+    # Load the CSV file
+    df = pd.read_csv(csv_file)
+    
+    # Ensure the CSV has at least two columns
+    if df.shape[1] < 2:
+        raise ValueError("The CSV file must contain at least two columns.")
+    
+    # Calculate Pearson correlation coefficient
+    col1 = df.columns[0]
+    col2 = df.columns[1]
+    r, _ = pearsonr(df[col1], df[col2])
+    
+    # Number of data points
+    n = len(df)
+    
+    # Calculate p-value
+    p_value = calculate_p_value(r, n)
+    
+    # Determine significance
+    significant = p_value < alpha
+    
+    print(f"Pearson correlation coefficient: {r}")
+    print(f"P-value: {p_value}")
+    print(f"Statistically significant (α={alpha}): {significant}")
+
+if __name__ == "__main__":
+    # Setup command line argument parsing
+    parser = argparse.ArgumentParser(description="Calculate Pearson's correlation coefficient and its significance from a CSV file.")
+    parser.add_argument('csv_file', type=str, help='Path to the CSV file')
+    parser.add_argument('--alpha', type=float, default=0.05, help='Significance level (default: 0.05)')
+    
+    args = parser.parse_args()
+    
+    main(args.csv_file, args.alpha)
 
