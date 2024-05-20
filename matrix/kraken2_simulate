@@ -1,0 +1,20 @@
+#!/bin/bash
+
+echo "Please specify dataset"
+read dataset
+echo "Please specify dir to fastq"
+read dir
+echo "Please specify number of read"
+read read_num
+echo "Please specify read length"
+read read_length
+mkdir /home/ariya/Desktop/kraken_test/"$dataset"
+mkdir /home/ariya/Desktop/kraken_test/"$dataset"/"$read_length"
+mkdir /home/ariya/Desktop/kraken_test/"$dataset"/"$read_length"/"$read_num"
+kraken2 --db /home/ariya/Desktop/kraken_db/build_in "$dir"/*.fastq --output /home/ariya/Desktop/kraken_test/"$dataset"/"$read_length"/"$read_num"/TAX.txt
+awk -F' ' '($1=="C")' /home/ariya/Desktop/kraken_test/"$dataset"/"$read_length"/"$read_num"/TAX.txt > /home/ariya/Desktop/kraken_test/"$dataset"/"$read_length"/"$read_num"/TAX_c.txt
+awk -F' ' '{print$2,"\t",$3}' /home/ariya/Desktop/kraken_test/"$dataset"/"$read_length"/"$read_num"/TAX_c.txt > /home/ariya/Desktop/kraken_test/"$dataset"/"$read_length"/"$read_num"/classified_read.txt
+awk -F' ' '{print$2}' /home/ariya/Desktop/kraken_test/"$dataset"/"$read_length"/"$read_num"/classified_read.txt > /home/ariya/Desktop/kraken_test/"$dataset"/"$read_length"/"$read_num"/taxid.txt
+taxonkit lineage /home/ariya/Desktop/kraken_test/"$dataset"/"$read_length"/"$read_num"/taxid.txt > /home/ariya/Desktop/kraken_test/"$dataset"/"$read_length"/"$read_num"/lineage.txt
+awk -F';' '{print $NF}' /home/ariya/Desktop/kraken_test/"$dataset"/"$read_length"/"$read_num"/lineage.txt | awk -F' ' '{print$1,$2}' > /home/ariya/Desktop/kraken_test/"$dataset"/"$read_length"/"$read_num"/species.txt
+sort /home/ariya/Desktop/kraken_test/"$dataset"/"$read_length"/"$read_num"/species.txt > /home/ariya/Desktop/kraken_test/"$dataset"/"$read_length"/"$read_num"/species_sorted.txt

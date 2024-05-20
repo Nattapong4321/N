@@ -1,0 +1,18 @@
+#!/bin/bash
+
+echo "Please specify dataset"
+read dataset
+echo "Please specify dir to fastq"
+read dir
+echo "Please specify number of read"
+read read_num
+echo "Please specify read length"
+read read_length
+mkdir /home/ariya/Desktop/centrifuge_test/"$dataset"
+mkdir /home/ariya/Desktop/centrifuge_test/"$dataset"/"$read_length"
+mkdir /home/ariya/Desktop/centrifuge_test/"$dataset"/"$read_length"/"$read_num"
+cd centrifuge
+/usr/bin/time -v centrifuge -x /home/ariya/Desktop/centrifuge_db/fungi/build_in1/build_in -U "$dir"/*.fastq --report-file /home/ariya/Desktop/centrifuge_test/"$dataset"/"$read_length"/"$read_num"/report.tsv
+cd 
+grep -v "name" /home/ariya/Desktop/centrifuge_test/"$dataset"/"$read_length"/"$read_num"/report.tsv > /home/ariya/Desktop/centrifuge_test/"$dataset"/"$read_length"/"$read_num"/report.txt
+awk -F'\t' '{print$1,"\t",$5}' /home/ariya/Desktop/centrifuge_test/"$dataset"/"$read_length"/"$read_num"/report.txt > /home/ariya/Desktop/centrifuge_test/"$dataset"/"$read_length"/"$read_num"/species.txt

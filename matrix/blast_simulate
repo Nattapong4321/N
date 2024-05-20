@@ -1,0 +1,24 @@
+#!/bin/bash
+
+echo "Please specify dataset"
+read dataset
+echo "Please specify dir to fastq"
+read dir
+echo "Please specify number of read"
+read read_num
+echo "Please specify read length"
+read read_length
+mkdir /home/ariya/Desktop/blast_out/"$dataset"
+mkdir /home/ariya/Desktop/blast_out/"$dataset"/"$read_length"
+mkdir /home/ariya/Desktop/blast_out/"$dataset"/"$read_length"/"$read_num"
+cd /home/ariya/Desktop/Blast_db
+/home/ariya/ncbi-blast-2.13.0+-x64-linux/ncbi-blast-2.13.0+/bin/blastn -db build_in_database.fasta -query "$dir"/all.fasta -outfmt "6 qseqid sseqid qstart qend sstart send pident evalue ssciname staxid" -out /home/ariya/Desktop/blast_out/"$dataset"/"$read_length"/"$read_num"/blast_out.txt -max_target_seqs 1
+sort -k1,1 -k7,7nr /home/ariya/Desktop/blast_out/"$dataset"/"$read_length"/"$read_num"/blast_out.txt | awk '!seen[$1]++' > /home/ariya/Desktop/blast_out/"$dataset"/"$read_length"/"$read_num"/blast_out_uniq.txt
+awk -F' ' '($7>=90.00)' /home/ariya/Desktop/blast_out/"$dataset"/"$read_length"/"$read_num"/blast_out_uniq.txt > /home/ariya/Desktop/blast_out/"$dataset"/"$read_length"/"$read_num"/blast_out_uniq.txt_c
+awk -F' ' '{print$2}' /home/ariya/Desktop/blast_out/"$dataset"/"$read_length"/"$read_num"/blast_out_uniq.txt_c > /home/ariya/Desktop/blast_out/"$dataset"/"$read_length"/"$read_num"/accession.txt
+while IFS= read -r accession; do
+  organism=$(efetch -db nucleotide -id "$accession" -format docsum | xtract -pattern DocumentSummary -element Organism)
+  echo "$organism" | awk -F' ' '{print$1,$2}' >> /home/ariya/Desktop/blast_out/$dataset/$read_length/$read_num/species.txt
+done < /home/ariya/Desktop/blast_out/$dataset/$read_length/$read_num/accession.txt
+
+
