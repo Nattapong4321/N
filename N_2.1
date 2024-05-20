@@ -1,0 +1,746 @@
+#!/bin/bash
+
+#Generate build in database
+build_in_database() {
+
+#load the preset fungal genome id to text file
+echo "Initializing build in database generation"
+mkdir ./anaconda3/envs/N/database
+mkdir ./anaconda3/envs/N/database/build_in
+echo "Load genome ID"
+echo "21
+192
+45142
+212
+38761
+14557
+276
+421
+14506
+73572
+46546
+46545
+61
+13280
+924
+15
+67043
+36242
+15581
+18
+930
+12360
+34156
+15937
+728
+2804
+53
+22522
+707
+429
+360
+243
+11010" > ./anaconda3/envs/N/database/build_in/genomelist.txt
+echo "
+5476
+5478
+37769
+5482
+498019
+4909
+4929
+42374
+34356
+82508
+82524
+82517
+5207
+5286
+29898
+4932
+45357
+5537
+5503
+746128
+5480
+169388
+114742
+58291
+37727
+36080
+33178
+29908
+5507
+5061
+5059
+5037
+42068" > ./anaconda3/envs/N/database/build_in/namelist.txt
+echo "Initiating edirect pipeline..."
+
+#extract species name and check similarity between GCF and GCA
+echo "Extract species taxonomic name from input taxid"
+cat ./anaconda3/envs/N/database/build_in/genomelist.txt | epost -db genome -format uid | esummary -db genome | xtract -pattern DocumentSummary -element AssemblyID | epost -db assembly | esummary -db assembly | xtract -pattern DocumentSummary -element Id,'\t',SpeciesName,'\t',Similarity > ./anaconda3/envs/N/database/build_in/checksim.txt
+awk -F'\t' '($3=="different")' ./anaconda3/envs/N/database/build_in/checksim.txt > ./anaconda3/envs/N/database/build_in/dif.txt
+awk '{print $1}' ./anaconda3/envs/N/database/build_in/dif.txt > ./anaconda3/envs/N/database/build_in/dif1.txt
+grep -v 'different' ./anaconda3/envs/N/database/build_in/checksim.txt > ./anaconda3/envs/N/database/build_in/sim.txt
+awk '{print $1}' ./anaconda3/envs/N/database/build_in/sim.txt > ./anaconda3/envs/N/database/build_in/sim1.txt
+
+#Prepared download refseq for genome id that have different similarity of GCA and GCF
+echo "Download sequence from refseq for taxid that have different similarity of GCA and GCF"
+cat ./anaconda3/envs/N/database/build_in/dif1.txt | epost -db assembly -format uid | esummary -db assembly | xtract -pattern DocumentSummary -block FtpPath -match "@type:Refseq" -element FtpPath | sed 's/$/\//' > ./anaconda3/envs/N/database/build_in/ftpdirpath.txt
+
+#Prepared download genbank for genome id that have identical similarity of GCA and GCF or don't have GCF
+echo "Download sequence from genbank for taxid that have identical similarity of GCA and GCF or don't have GCF"
+cat ./anaconda3/envs/N/database/build_in/sim1.txt | epost -db assembly -format uid | esummary -db assembly | xtract -pattern DocumentSummary -block FtpPath -match "@type:Genbank" -element FtpPath | sed 's/$/\//' >> ./anaconda3/envs/N/database/build_in/ftpdirpath.txt
+
+#convert ftp path and add http
+echo "Convert ftp to http"
+awk 'BEGIN{FS=OFS="/";filesuffix="genomic.fna.gz"}{ftpdir=$0;asm=$10;file=asm"_"filesuffix;print ftpdir""file}' ./anaconda3/envs/N/database/build_in/ftpdirpath.txt > ./anaconda3/envs/N/database/build_in/ftpfilepaths.txt
+sed -i 's+ftp://+https://+g' ./anaconda3/envs/N/database/build_in/ftpfilepaths.txt  
+
+#download genome with wget, concatenate to single fasta and move to N
+mkdir ./anaconda3/envs/N/database/build_in/Genome 
+echo "Downloading Genome with wget, will took a while..."
+wget -r --no-parent --no-host-directories --cut-dirs=3 --level=1 --input-file=./anaconda3/envs/N/database/build_in/ftpfilepaths.txt --directory-prefix=Genomic_Only 
+echo "Concatenate and move to N database archive"
+mv ./Genomic_Only ./anaconda3/envs/N/database/build_in/Genome
+gunzip -r ./anaconda3/envs/N/database/build_in/Genome/Genomic_Only
+find ./anaconda3/envs/N/database/build_in/Genome/Genomic_Only -type f -name '*.fna' -exec cat {} + > ./anaconda3/envs/N/database/build_in/Genome/build_in_database.fasta
+
+#Indexing the database with minimap2
+echo "Indexing database with minimap2"
+minimap2 -d ./anaconda3/envs/N/database/build_in/Genome/build_in_database.mmi ./anaconda3/envs/N/database/build_in/Genome/build_in_database.fasta
+echo "Primary indexing build in database done"
+
+#Finding the overlap in database
+echo "Initiating overlap pipeline"
+echo "Making overlap directory in N"
+echo "Extract FASTA header from build_in database"
+find ./anaconda3/envs/N/database/build_in/Genome/Genomic_Only -type f -name '*.fna' -exec ls {} + > ./anaconda3/envs/N/database/build_in/Genome/genome_dir_list.txt
+mkdir ./anaconda3/envs/N/overlap
+mkdir ./anaconda3/envs/N/overlap/build_in
+mkdir ./anaconda3/envs/N/overlap/build_in/intermediate_output
+grep '^>' ./anaconda3/envs/N/database/build_in/Genome/build_in_database.fasta > ./anaconda3/envs/N/overlap/build_in/intermediate_output/all_accession.txt
+echo "Finding overlaped region by aligning each genome on concatenated genome" 
+echo "Extracting the accession number of query and target of overlaped region of each species"
+sp=0
+while read line; do
+	mkdir ./anaconda3/envs/N/overlap/build_in/intermediate_output/"$sp"
+	minimap2 -x map-ont ./anaconda3/envs/N/database/build_in/Genome/*.mmi "$line" > ./anaconda3/envs/N/overlap/build_in/intermediate_output/"$sp"/map.paf
+	awk -F' ' '($1!=$6)' ./anaconda3/envs/N/overlap/build_in/intermediate_output/"$sp"/map.paf > ./anaconda3/envs/N/overlap/build_in/intermediate_output/"$sp"/overlap.paf
+	awk -F' ' '{print$1}' ./anaconda3/envs/N/overlap/build_in/intermediate_output/"$sp"/overlap.paf > ./anaconda3/envs/N/overlap/build_in/intermediate_output/"$sp"/query.txt
+	awk -F' ' '{print$6}' ./anaconda3/envs/N/overlap/build_in/intermediate_output/"$sp"/overlap.paf > ./anaconda3/envs/N/overlap/build_in/intermediate_output/"$sp"/target.txt
+	sp=$(( $sp+1 ))
+done < ./anaconda3/envs/N/database/build_in/Genome/genome_dir_list.txt
+echo "Aligning completed"
+echo "Extracting the accession number of query and target of overlaped region from all species"
+find ./anaconda3/envs/N/overlap/build_in/intermediate_output -type f -name 'query.txt' -exec cat {} + > ./anaconda3/envs/N/overlap/build_in/intermediate_output/all_query.txt
+find ./anaconda3/envs/N/overlap/build_in/intermediate_output -type f -name 'target.txt' -exec cat {} + > ./anaconda3/envs/N/overlap/build_in/intermediate_output/all_target.txt
+echo "Finding query annotation of the overlaped region by accession"
+while read line; do
+	grep "$line" ./anaconda3/envs/N/overlap/build_in/intermediate_output/all_accession.txt
+done < ./anaconda3/envs/N/overlap/build_in/intermediate_output/all_query.txt > ./anaconda3/envs/N/overlap/build_in/intermediate_output/query_search.txt
+echo "Finding target annotation of the overlaped region by accession"
+while read line; do
+	grep "$line" ./anaconda3/envs/N/overlap/build_in/intermediate_output/all_accession.txt
+done < ./anaconda3/envs/N/overlap/build_in/intermediate_output/all_target.txt > ./anaconda3/envs/N/overlap/build_in/intermediate_output/target_search.txt
+echo "Matching the annotation of query and target of the overlapped region and claer the information"
+paste ./anaconda3/envs/N/overlap/build_in/intermediate_output/query_search.txt ./anaconda3/envs/N/overlap/build_in/intermediate_output/target_search.txt > ./anaconda3/envs/N/overlap/build_in/intermediate_output/final_out.txt
+awk -F' ' '{print$2,$3}' ./anaconda3/envs/N/overlap/build_in/intermediate_output/query_search.txt > ./anaconda3/envs/N/overlap/build_in/intermediate_output/species_query.txt
+awk -F' ' '{print$2,$3}' ./anaconda3/envs/N/overlap/build_in/intermediate_output/target_search.txt > ./anaconda3/envs/N/overlap/build_in/intermediate_output/species_target.txt
+paste ./anaconda3/envs/N/overlap/build_in/intermediate_output/species_query.txt ./anaconda3/envs/N/overlap/build_in/intermediate_output/species_target.txt > ./anaconda3/envs/N/overlap/build_in/intermediate_output/overlap_species.txt
+mkdir ./anaconda3/envs/N/overlap/build_in/final_output
+find ./anaconda3/envs/N/overlap/build_in/intermediate_output -type f -name 'overlap.paf' -exec cat {} + > ./anaconda3/envs/N/overlap/build_in/intermediate_output/all_overlap.paf
+echo "Matching annotation with overlaped region information"
+paste ./anaconda3/envs/N/overlap/build_in/intermediate_output/overlap_species.txt ./anaconda3/envs/N/overlap/build_in/intermediate_output/all_overlap.paf > ./anaconda3/envs/N/overlap/build_in/final_output/overlap_species_final_same_species.txt 
+echo "Filter only overlap from different species and generate final output"
+awk -F' ' '($1!=$3) || ($2!=$4)' ./anaconda3/envs/N/overlap/build_in/final_output/overlap_species_final_same_species.txt > ./anaconda3/envs/N/overlap/build_in/final_output/overlap_species_final_diff_species.txt 
+echo "Overlap pipeline complete"
+
+#mask database
+echo "Initiate masking pipeline"
+echo "Mask database by overlaped region"
+mkdir ./anaconda3/envs/N/overlap/build_in/mask_database
+awk -F'\t' '{print$8}' ./anaconda3/envs/N/overlap/build_in/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/build_in/mask_database/target_overlap1.bed
+awk -F'\t' '{print$10}' ./anaconda3/envs/N/overlap/build_in/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/build_in/mask_database/target_overlap2.bed
+awk -F'\t' '{print$11}' ./anaconda3/envs/N/overlap/build_in/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/build_in/mask_database/target_overlap3.bed
+awk -F'\t' '{print$3}' ./anaconda3/envs/N/overlap/build_in/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/build_in/mask_database/query_overlap1.bed
+awk -F'\t' '{print$5}' ./anaconda3/envs/N/overlap/build_in/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/build_in/mask_database/query_overlap2.bed
+awk -F'\t' '{print$6}' ./anaconda3/envs/N/overlap/build_in/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/build_in/mask_database/query_overlap3.bed
+paste ./anaconda3/envs/N/overlap/build_in/mask_database/query_overlap1.bed ./anaconda3/envs/N/overlap/build_in/mask_database/query_overlap2.bed ./anaconda3/envs/N/overlap/build_in/mask_database/query_overlap3.bed > ./anaconda3/envs/N/overlap/build_in/mask_database/query_overlap_final.bed
+paste ./anaconda3/envs/N/overlap/build_in/mask_database/target_overlap1.bed ./anaconda3/envs/N/overlap/build_in/mask_database/target_overlap2.bed ./anaconda3/envs/N/overlap/build_in/mask_database/target_overlap3.bed > ./anaconda3/envs/N/overlap/build_in/mask_database/target_overlap_final.bed
+sort -k1,1 -k2n ./anaconda3/envs/N/overlap/build_in/mask_database/target_overlap_final.bed > ./anaconda3/envs/N/overlap/build_in/mask_database/target_overlap_final_sorted.bed
+bedtools merge -i ./anaconda3/envs/N/overlap/build_in/mask_database/target_overlap_final_sorted.bed > ./anaconda3/envs/N/overlap/build_in/mask_database/target_overlap_final_merged.bed
+bedtools maskfasta -mc X -fi ./anaconda3/envs/N/database/build_in/Genome/build_in_database.fasta -bed ./anaconda3/envs/N/overlap/build_in/mask_database/target_overlap_final_merged.bed -fo ./anaconda3/envs/N/overlap/build_in/mask_database/build_in_masked.fasta
+
+#Clear output in database folder
+echo "Remove unmasked database and all intermediated output and generate final output in ./database/build_in"
+rm ./anaconda3/envs/N/database/build_in/Genome/build_in_database.fasta
+rm ./anaconda3/envs/N/database/build_in/Genome/build_in_database.mmi
+mv ./anaconda3/envs/N/database/build_in/namelist.txt ./anaconda3/envs/N/overlap/build_in/intermediate_output/namelist.txt
+rm -r ./anaconda3/envs/N/database/build_in/*
+mv ./anaconda3/envs/N/overlap/build_in/mask_database/build_in_masked.fasta ./anaconda3/envs/N/database/build_in/build_in_masked.fasta
+mv ./anaconda3/envs/N/overlap/build_in/final_output/overlap_species_final_diff_species.txt ./anaconda3/envs/N/database/build_in/overlap_profile.txt
+cat ./anaconda3/envs/N/overlap/build_in/mask_database/query_overlap_final.bed > ./anaconda3/envs/N/database/build_in/overlap_final.bed
+mv ./anaconda3/envs/N/overlap/build_in/intermediate_output/all_accession.txt ./anaconda3/envs/N/database/build_in/all_accession.txt
+mv ./anaconda3/envs/N/overlap/build_in/intermediate_output/namelist.txt ./anaconda3/envs/N/database/build_in/namelist.txt
+rm -r ./anaconda3/envs/N/overlap/*
+rm -d ./anaconda3/envs/N/overlap
+
+#Indexing the database with minimap2
+echo "Final Indexing with minimap2"
+minimap2 -d ./anaconda3/envs/N/database/build_in/build_in_masked.mmi ./anaconda3/envs/N/database/build_in/build_in_masked.fasta
+echo "Build_in database generated"
+echo "All output stored in ./anaconda3/envs/N/database/build_in"
+echo "Have a nice day"
+re
+}
+
+#Generate refseq database
+refseq_database () {
+
+#load the preset fungal taxid to text file
+echo "Initializing fungal refseq database downloading pipeline"
+mkdir ./anaconda3/envs/N/database
+mkdir ./anaconda3/envs/N/database/refseq
+
+#Download ftp path from NCBI
+curl -o ./anaconda3/envs/N/database/refseq/assembly_summary.txt https://ftp.ncbi.nlm.nih.gov/genomes/refseq/fungi/assembly_summary.txt
+cat ./anaconda3/envs/N/database/refseq/assembly_summary.txt | awk -F':' '{print$2}' | awk -F' ' '{print$1}' | grep '^//' | awk '{ printf "https:"; print }' > ./anaconda3/envs/N/database/refseq/ftpdirpath.txt
+awk 'BEGIN{FS=OFS="/";filesuffix="genomic.fna.gz"}{ftpdir=$0;asm=$10;file=asm"_"filesuffix;print ftpdir"/"file}' ./anaconda3/envs/N/database/refseq/ftpdirpath.txt > ./anaconda3/envs/N/database/refseq/ftpfilepaths.txt
+cat ./anaconda3/envs/N/database/refseq/assembly_summary.txt | awk -F'genome' '{print$2}' | awk -F' ' '{print$1}' | grep -v '_' > /anaconda3/envs/N/database/refseq/namelist.txt
+
+#download genome with wget, concatenate to single fasta and move to N
+mkdir ./anaconda3/envs/N/database/refseq/Genome 
+echo "Downloading Genome with wget, will took a while..."
+wget -r --no-parent --no-host-directories --cut-dirs=3 --level=1 --input-file=./anaconda3/envs/N/database/refseq/ftpfilepaths.txt --directory-prefix=Genomic_Only 
+echo "Concatenate and move to N database archive"
+mv ./Genomic_Only ./anaconda3/envs/N/database/refseq/Genome
+gunzip -r ./anaconda3/envs/N/database/refseq/Genome/Genomic_Only
+find ./anaconda3/envs/N/database/refseq/Genome/Genomic_Only -type f -name '*.fna' -exec cat {} + > ./anaconda3/envs/N/database/refseq/Genome/refseq_database.fasta
+
+#Indexing the database with minimap2
+echo "Indexing database with minimap2"
+minimap2 -k 20 -w 200 -I2g -t 12 -d ./anaconda3/envs/N/database/refseq/Genome/refseq_database.mmi ./anaconda3/envs/N/database/refseq/Genome/refseq_database.fasta
+echo "Primary indexing build in database done"
+
+#Finding the overlap in database
+echo "Initiating overlap pipeline"
+echo "Making overlap directory in N"
+echo "Extract FASTA header from refseq database"
+find ./anaconda3/envs/N/database/refseq/Genome/Genomic_Only -type f -name '*.fna' -exec ls {} + > ./anaconda3/envs/N/database/refseq/Genome/genome_dir_list.txt
+mkdir ./anaconda3/envs/N/overlap
+mkdir ./anaconda3/envs/N/overlap/refseq
+mkdir ./anaconda3/envs/N/overlap/refseq/intermediate_output
+grep '^>' ./anaconda3/envs/N/database/refseq/Genome/refseq_database.fasta > ./anaconda3/envs/N/overlap/refseq/intermediate_output/all_accession.txt
+echo "Finding overlaped region by aligning each genome on concatenated genome" 
+echo "Extracting the accession number of query and target of overlaped region of each species"
+sp=0
+while read line; do
+	mkdir ./anaconda3/envs/N/overlap/refseq/intermediate_output/"$sp"
+	minimap2 -r 10000 -m 90 -x asm5 -E 20 -O 20 -B 20 ./anaconda3/envs/N/database/refseq/Genome/*.mmi "$line" > ./anaconda3/envs/N/overlap/refseq/intermediate_output/"$sp"/map.paf
+	awk -F' ' '($1!=$6)' ./anaconda3/envs/N/overlap/refseq/intermediate_output/"$sp"/map.paf > ./anaconda3/envs/N/overlap/refseq/intermediate_output/"$sp"/overlap.paf
+	awk -F' ' '{print$1}' ./anaconda3/envs/N/overlap/refseq/intermediate_output/"$sp"/overlap.paf > ./anaconda3/envs/N/overlap/refseq/intermediate_output/"$sp"/query.txt
+	awk -F' ' '{print$6}' ./anaconda3/envs/N/overlap/refseq/intermediate_output/"$sp"/overlap.paf > ./anaconda3/envs/N/overlap/refseq/intermediate_output/"$sp"/target.txt
+	sp=$(( $sp+1 ))
+done < ./anaconda3/envs/N/database/refseq/Genome/genome_dir_list.txt
+echo "Aligning completed"
+echo "Extracting the accession number of query and target of overlaped region fromm all species"
+find ./anaconda3/envs/N/overlap/refseq/intermediate_output -type f -name 'query.txt' -exec cat {} + > ./anaconda3/envs/N/overlap/refseq/intermediate_output/all_query.txt
+find ./anaconda3/envs/N/overlap/refseq/intermediate_output -type f -name 'target.txt' -exec cat {} + > ./anaconda3/envs/N/overlap/refseq/intermediate_output/all_target.txt
+echo "Finding query annotation of the overlaped region by accession"
+while read line; do
+	grep "$line" ./anaconda3/envs/N/overlap/refseq/intermediate_output/all_accession.txt
+done < ./anaconda3/envs/N/overlap/refseq/intermediate_output/all_query.txt > ./anaconda3/envs/N/overlap/refseq/intermediate_output/query_search.txt
+echo "Finding target annotaion of the overlaped region by accession"
+while read line; do
+	grep "$line" ./anaconda3/envs/N/overlap/refseq/intermediate_output/all_accession.txt
+done < ./anaconda3/envs/N/overlap/refseq/intermediate_output/all_target.txt > ./anaconda3/envs/N/overlap/refseq/intermediate_output/target_search.txt
+echo "Matching the annoation of query and target of the overlapped region and claer the information"
+paste ./anaconda3/envs/N/overlap/refseq/intermediate_output/query_search.txt ./anaconda3/envs/N/overlap/refseq/intermediate_output/target_search.txt > ./anaconda3/envs/N/overlap/refseq/intermediate_output/final_out.txt
+awk -F' ' '{print$2,$3}' ./anaconda3/envs/N/overlap/refseq/intermediate_output/query_search.txt > ./anaconda3/envs/N/overlap/refseq/intermediate_output/species_query.txt
+awk -F' ' '{print$2,$3}' ./anaconda3/envs/N/overlap/refseq/intermediate_output/target_search.txt > ./anaconda3/envs/N/overlap/refseq/intermediate_output/species_target.txt
+paste ./anaconda3/envs/N/overlap/refseq/intermediate_output/species_query.txt ./anaconda3/envs/N/overlap/refseq/intermediate_output/species_target.txt > ./anaconda3/envs/N/overlap/refseq/intermediate_output/overlap_species.txt
+mkdir ./anaconda3/envs/N/overlap/refseq/final_output
+find ./anaconda3/envs/N/overlap/refseq/intermediate_output -type f -name 'overlap.paf' -exec cat {} + > ./anaconda3/envs/N/overlap/refseq/intermediate_output/all_overlap.paf
+echo "Matching annotation with overlaped region information"
+paste ./anaconda3/envs/N/overlap/refseq/intermediate_output/overlap_species.txt ./anaconda3/envs/N/overlap/refseq/intermediate_output/all_overlap.paf > ./anaconda3/envs/N/overlap/refseq/final_output/overlap_species_final_same_species.txt 
+echo "Filter only overlap from different species and generate final output"
+awk -F' ' '($1!=$3) || ($2!=$4)' ./anaconda3/envs/N/overlap/refseq/final_output/overlap_species_final_same_species.txt > ./anaconda3/envs/N/overlap/refseq/final_output/overlap_species_final_diff_species.txt 
+echo "Overlap pipeline complete"
+
+#mask database
+echo "Initiate masking pipeline"
+echo "Mask database by overlaped region"
+mkdir ./anaconda3/envs/N/overlap/refseq/mask_database
+awk -F'\t' '{print$8}' ./anaconda3/envs/N/overlap/refseq/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/refseq/mask_database/target_overlap1.bed
+awk -F'\t' '{print$10}' ./anaconda3/envs/N/overlap/refseq/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/refseq/mask_database/target_overlap2.bed
+awk -F'\t' '{print$11}' ./anaconda3/envs/N/overlap/refseq/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/refseq/mask_database/target_overlap3.bed
+awk -F'\t' '{print$3}' ./anaconda3/envs/N/overlap/refseq/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/refseq/mask_database/query_overlap1.bed
+awk -F'\t' '{print$5}' ./anaconda3/envs/N/overlap/refseq/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/refseq/mask_database/query_overlap2.bed
+awk -F'\t' '{print$6}' ./anaconda3/envs/N/overlap/refseq/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/refseq/mask_database/query_overlap3.bed
+paste ./anaconda3/envs/N/overlap/refseq/mask_database/query_overlap1.bed ./anaconda3/envs/N/overlap/refseq/mask_database/query_overlap2.bed ./anaconda3/envs/N/overlap/refseq/mask_database/query_overlap3.bed > ./anaconda3/envs/N/overlap/refseq/mask_database/query_overlap_final.bed
+paste ./anaconda3/envs/N/overlap/refseq/mask_database/target_overlap1.bed ./anaconda3/envs/N/overlap/refseq/mask_database/target_overlap2.bed ./anaconda3/envs/N/overlap/refseq/mask_database/target_overlap3.bed > ./anaconda3/envs/N/overlap/refseq/mask_database/target_overlap_final.bed
+sort -k1,1 -k2n ./anaconda3/envs/N/overlap/refseq/mask_database/target_overlap_final.bed > ./anaconda3/envs/N/overlap/refseq/mask_database/target_overlap_final_sorted.bed
+bedtools merge -i ./anaconda3/envs/N/overlap/refseq/mask_database/target_overlap_final_sorted.bed > ./anaconda3/envs/N/overlap/refseq/mask_database/target_overlap_final_merged.bed
+bedtools maskfasta -mc X -fi ./anaconda3/envs/N/database/refseq/Genome/refseq_database.fasta -bed ./anaconda3/envs/N/overlap/refseq/mask_database/target_overlap_final_merged.bed -fo ./anaconda3/envs/N/overlap/refseq/mask_database/refseq_masked.fasta
+
+#Clear output in database folder
+echo "Remove unmasked database and all intermediated output and generate final output in ./database/refseq"
+rm ./anaconda3/envs/N/database/refseq/Genome/refseq_database.fasta
+rm ./anaconda3/envs/N/database/refseq/Genome/refseq_database.mmi
+mv ./anaconda3/envs/N/database/refseq/namelist.txt ./anaconda3/envs/N/overlap/refseq/intermediate_output/namelist.txt
+rm -r ./anaconda3/envs/N/database/refseq/*
+mv ./anaconda3/envs/N/overlap/refseq/mask_database/refseq_masked.fasta ./anaconda3/envs/N/database/refseq/refseq_masked.fasta
+mv ./anaconda3/envs/N/overlap/refseq/final_output/overlap_species_final_diff_species.txt ./anaconda3/envs/N/database/refseq/overlap_profile.txt
+cat ./anaconda3/envs/N/overlap/refseq/mask_database/query_overlap_final.bed > ./anaconda3/envs/N/database/refseq/overlap_final.bed
+mv ./anaconda3/envs/N/overlap/refseq/intermediate_output/all_accession.txt ./anaconda3/envs/N/database/refseq/all_accession.txt
+mv ./anaconda3/envs/N/overlap/refseq/intermediate_output/namelist.txt ./anaconda3/envs/N/database/refseq/namelist.txt
+rm -r ./anaconda3/envs/N/overlap/*
+rm -d ./anaconda3/envs/N/overlap
+
+#Indexing the database with minimap2
+echo "Final Indexing with minimap2"
+minimap2 -k 20 -w 200 -I2g -t 12 -d ./anaconda3/envs/N/database/refseq/refseq_masked.mmi ./anaconda3/envs/N/database/refseq/refseq_masked.fasta
+echo "Build_in database generated"
+echo "All output stored in ./anaconda3/envs/N/database/refseq"
+echo "Have a nice day"
+re
+
+}
+
+#Generate custom database
+custom_database() {
+
+#load the preset fungal genome id to text file
+echo -n "Please specify database name -> "
+read db_custom
+echo "Initializing custom database generation"
+mkdir ./anaconda3/envs/N/database
+mkdir ./anaconda3/envs/N/database/"$db_custom"
+echo -n "Please specify directory of genomelist file (include file) -> "
+read genomelist
+cat "$genomelist" | epost -db genome -format uid | esummary -db genome | xtract -pattern DocumentSummary -element AssemblyID | epost -db assembly | esummary -db assembly | xtract -pattern DocumentSummary -element Id,'\t',SpeciesName,'\t',Similarity > ./anaconda3/envs/N/database/"$db_custom"/checksim.txt
+cat "$genomelist" | epost -db genome -format uid | esummary -db genome | xtract -pattern DocumentSummary -element AssemblyID | epost -db assembly | esummary -db assembly | xtract -pattern DocumentSummary -element SpeciesTaxid > ./anaconda3/envs/N/database/"$db_custom"/namelist.txt
+awk -F'\t' '($3=="different")' ./anaconda3/envs/N/database/"$db_custom"/checksim.txt > ./anaconda3/envs/N/database/"$db_custom"/dif.txt
+awk '{print $1}' ./anaconda3/envs/N/database/"$db_custom"/dif.txt > ./anaconda3/envs/N/database/"$db_custom"/dif1.txt
+grep -v 'different' ./anaconda3/envs/N/database/"$db_custom"/checksim.txt > ./anaconda3/envs/N/database/"$db_custom"/sim.txt
+awk '{print $1}' ./anaconda3/envs/N/database/"$db_custom"/sim.txt > ./anaconda3/envs/N/database/"$db_custom"/sim1.txt
+
+#Prepared download refseq for genome id that have different similarity of GCA and GCF
+echo "Download sequence from refseq for taxid that have different similarity of GCA and GCF"
+cat ./anaconda3/envs/N/database/"$db_custom"/dif1.txt | epost -db assembly -format uid | esummary -db assembly | xtract -pattern DocumentSummary -block FtpPath -match "@type:Refseq" -element FtpPath | sed 's/$/\//' > ./anaconda3/envs/N/database/"$db_custom"/ftpdirpath.txt
+
+#Prepared download genbank for genome id that have identical similarity of GCA and GCF or don't have GCF
+echo "Download sequence from genbank for taxid that have identical similarity of GCA and GCF or don't have GCF"
+cat ./anaconda3/envs/N/database/"$db_custom"/sim1.txt | epost -db assembly -format uid | esummary -db assembly | xtract -pattern DocumentSummary -block FtpPath -match "@type:Genbank" -element FtpPath | sed 's/$/\//' >> ./anaconda3/envs/N/database/"$db_custom"/ftpdirpath.txt
+
+#convert ftp path and add http
+echo "Convert ftp to http"
+awk 'BEGIN{FS=OFS="/";filesuffix="genomic.fna.gz"}{ftpdir=$0;asm=$10;file=asm"_"filesuffix;print ftpdir""file}' ./anaconda3/envs/N/database/"$db_custom"/ftpdirpath.txt > ./anaconda3/envs/N/database/"$db_custom"/ftpfilepaths.txt
+sed -i 's+ftp://+https://+g' ./anaconda3/envs/N/database/"$db_custom"/ftpfilepaths.txt  
+
+#download genome with wget, concatenate to single fasta and move to N
+mkdir ./anaconda3/envs/N/database/"$db_custom"/Genome 
+echo "Downloading Genome with wget, will took a while..."
+wget -r --no-parent --no-host-directories --cut-dirs=3 --level=1 --input-file=./anaconda3/envs/N/database/"$db_custom"/ftpfilepaths.txt --directory-prefix=Genomic_Only 
+echo "Concatenate and move to N database archive"
+mv ./Genomic_Only ./anaconda3/envs/N/database/"$db_custom"/Genome
+gunzip -r ./anaconda3/envs/N/database/"$db_custom"/Genome/Genomic_Only
+find ./anaconda3/envs/N/database/"$db_custom"/Genome/Genomic_Only -type f -name '*.fna' -exec cat {} + > ./anaconda3/envs/N/database/"$db_custom"/Genome/custom_database.fasta
+
+#Indexing the database with minimap2
+echo "Indexing database with minimap2"
+minimap2 -d ./anaconda3/envs/N/database/"$db_custom"/Genome/custom_database.mmi ./anaconda3/envs/N/database/"$db_custom"/Genome/custom_database.fasta
+echo "Primary indexing build in database done"
+
+#Finding the overlap in database
+echo "Initiating overlap pipeline"
+echo "Making overlap directory in N"
+echo "Extract FASTA header from custom database"
+find ./anaconda3/envs/N/database/"$db_custom"/Genome/Genomic_Only -type f -name '*.fna' -exec ls {} + > ./anaconda3/envs/N/database/"$db_custom"/Genome/genome_dir_list.txt
+mkdir ./anaconda3/envs/N/overlap
+mkdir ./anaconda3/envs/N/overlap/"$db_custom"
+mkdir ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output
+grep '^>' ./anaconda3/envs/N/database/"$db_custom"/Genome/custom_database.fasta > ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/all_accession.txt
+echo "Finding overlaped region by aligning each genome on concatenated genome" 
+echo "Extracting the accession number of query and target of overlaped region of each species"
+sp=0
+while read line; do
+	mkdir ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/"$sp"
+	minimap2 -r 10000 -m 90 -x asm5 -E 20 -O 20 -B 20 ./anaconda3/envs/N/database/"$db_custom"/Genome/*.mmi "$line" > ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/"$sp"/map.paf
+	awk -F' ' '($1!=$6)' ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/"$sp"/map.paf > ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/"$sp"/overlap.paf
+	awk -F' ' '{print$1}' ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/"$sp"/overlap.paf > ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/"$sp"/query.txt
+	awk -F' ' '{print$6}' ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/"$sp"/overlap.paf > ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/"$sp"/target.txt
+	sp=$(( $sp+1 ))
+done < ./anaconda3/envs/N/database/"$db_custom"/Genome/genome_dir_list.txt
+echo "Aligning completed"
+echo "Extracting the accession number of query and target of overlaped region fromm all species"
+find ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output -type f -name 'query.txt' -exec cat {} + > ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/all_query.txt
+find ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output -type f -name 'target.txt' -exec cat {} + > ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/all_target.txt
+echo "Finding query annotation of the overlaped region by accession"
+while read line; do
+	grep "$line" ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/all_accession.txt
+done < ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/all_query.txt > ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/query_search.txt
+echo "Finding target annotaion of the overlaped region by accession"
+while read line; do
+	grep "$line" ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/all_accession.txt
+done < ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/all_target.txt > ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/target_search.txt
+echo "Matching the annoation of query and target of the overlapped region and claer the information"
+paste ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/query_search.txt ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/target_search.txt > ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/final_out.txt
+awk -F' ' '{print$2,$3}' ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/query_search.txt > ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/species_query.txt
+awk -F' ' '{print$2,$3}' ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/target_search.txt > ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/species_target.txt
+paste ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/species_query.txt ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/species_target.txt > ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/overlap_species.txt
+mkdir ./anaconda3/envs/N/overlap/"$db_custom"/final_output
+find ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output -type f -name 'overlap.paf' -exec cat {} + > ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/all_overlap.paf
+echo "Matching annotation with overlaped region information"
+paste ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/overlap_species.txt ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/all_overlap.paf > ./anaconda3/envs/N/overlap/"$db_custom"/final_output/overlap_species_final_same_species.txt 
+echo "Filter only overlap from different species and generate final output"
+awk -F' ' '($1!=$3) || ($2!=$4)' ./anaconda3/envs/N/overlap/"$db_custom"/final_output/overlap_species_final_same_species.txt > ./anaconda3/envs/N/overlap/"$db_custom"/final_output/overlap_species_final_diff_species.txt 
+echo "Overlap pipeline complete"
+
+#mask database
+echo "Initiate masking pipeline"
+echo "Mask database by overlaped region"
+mkdir ./anaconda3/envs/N/overlap/"$db_custom"/mask_database
+awk -F'\t' '{print$8}' ./anaconda3/envs/N/overlap/"$db_custom"/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/"$db_custom"/mask_database/target_overlap1.bed
+awk -F'\t' '{print$10}' ./anaconda3/envs/N/overlap/"$db_custom"/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/"$db_custom"/mask_database/target_overlap2.bed
+awk -F'\t' '{print$11}' ./anaconda3/envs/N/overlap/"$db_custom"/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/"$db_custom"/mask_database/target_overlap3.bed
+awk -F'\t' '{print$3}' ./anaconda3/envs/N/overlap/"$db_custom"/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/"$db_custom"/mask_database/query_overlap1.bed
+awk -F'\t' '{print$5}' ./anaconda3/envs/N/overlap/"$db_custom"/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/"$db_custom"/mask_database/query_overlap2.bed
+awk -F'\t' '{print$6}' ./anaconda3/envs/N/overlap/"$db_custom"/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/"$db_custom"/mask_database/query_overlap3.bed
+paste ./anaconda3/envs/N/overlap/"$db_custom"/mask_database/query_overlap1.bed ./anaconda3/envs/N/overlap/"$db_custom"/mask_database/query_overlap2.bed ./anaconda3/envs/N/overlap/"$db_custom"/mask_database/query_overlap3.bed > ./anaconda3/envs/N/overlap/"$db_custom"/mask_database/query_overlap_final.bed
+paste ./anaconda3/envs/N/overlap/"$db_custom"/mask_database/target_overlap1.bed ./anaconda3/envs/N/overlap/"$db_custom"/mask_database/target_overlap2.bed ./anaconda3/envs/N/overlap/"$db_custom"/mask_database/target_overlap3.bed > ./anaconda3/envs/N/overlap/"$db_custom"/mask_database/target_overlap_final.bed
+sort -k1,1 -k2n ./anaconda3/envs/N/overlap/"$db_custom"/mask_database/target_overlap_final.bed > ./anaconda3/envs/N/overlap/"$db_custom"/mask_database/target_overlap_final_sorted.bed
+bedtools merge -i ./anaconda3/envs/N/overlap/"$db_custom"/mask_database/target_overlap_final_sorted.bed > ./anaconda3/envs/N/overlap/"$db_custom"/mask_database/target_overlap_final_merged.bed
+bedtools maskfasta -mc X -fi ./anaconda3/envs/N/database/"$db_custom"/Genome/custom_database.fasta -bed ./anaconda3/envs/N/overlap/"$db_custom"/mask_database/target_overlap_final_merged.bed -fo ./anaconda3/envs/N/overlap/"$db_custom"/mask_database/"$db_custom"_masked.fasta
+
+#Clear output in database folder
+echo "Remove unmasked database and all intermediated output and generate final output in ./database/"$db_custom""
+rm ./anaconda3/envs/N/database/"$db_custom"/Genome/custom_database.fasta
+rm ./anaconda3/envs/N/database/"$db_custom"/Genome/custom_database.mmi
+mv ./anaconda3/envs/N/database/"$db_custom"/namelist.txt ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/namelist.txt
+rm -r ./anaconda3/envs/N/database/"$db_custom"/*
+mv ./anaconda3/envs/N/overlap/"$db_custom"/mask_database/"$db_custom"_masked.fasta ./anaconda3/envs/N/database/"$db_custom"/custom_masked.fasta
+mv ./anaconda3/envs/N/overlap/"$db_custom"/final_output/overlap_species_final_diff_species.txt ./anaconda3/envs/N/database/"$db_custom"/overlap_profile.txt
+cat ./anaconda3/envs/N/overlap/"$db_custom"/mask_database/query_overlap_final.bed > ./anaconda3/envs/N/database/"$db_custom"/overlap_final.bed
+mv ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/all_accession.txt ./anaconda3/envs/N/database/"$db_custom"/all_accession.txt
+mv ./anaconda3/envs/N/overlap/"$db_custom"/intermediate_output/namelist.txt ./anaconda3/envs/N/database/"$db_custom"/namelist.txt
+rm -r ./anaconda3/envs/N/overlap/*
+rm -d ./anaconda3/envs/N/overlap
+
+#Indexing the database with minimap2
+echo "Final Indexing with minimap2"
+minimap2 -k 20 -d ./anaconda3/envs/N/database/"$db_custom"/custom_masked.mmi ./anaconda3/envs/N/database/"$db_custom"/custom_masked.fasta
+echo "Build_in database generated"
+echo "All output stored in ./anaconda3/envs/N/database/"$db_custom""
+echo "Have a nice day"
+re
+
+}
+
+#Generate dark_hyphae database
+dark_hyphae_database() {
+
+#load the preset fungal genome id to text file
+echo "Initializing dark_hyphae fungi database generation"
+mkdir ./anaconda3/envs/N/database
+mkdir ./anaconda3/envs/N/database/dark_hyphae
+echo "Load genome ID"
+echo "121408
+104827
+101318
+57245
+54183
+36249
+36247
+36244
+16215
+15581
+13435
+12991
+12532
+11201
+2962" > ./anaconda3/envs/N/database/dark_hyphae/genomelist.txt
+echo "145392
+1659837
+114231
+41688
+39412
+86056
+89940
+40355
+86049
+5503
+101162
+92950
+93612
+5599
+5970" > ./anaconda3/envs/N/database/dark_hyphae/namelist.txt
+echo "Initiating edirect pipeline..."
+
+#extract species name and check similarity between GCF and GCA
+echo "Extract species taxonomic name from input taxid"
+cat ./anaconda3/envs/N/database/dark_hyphae/genomelist.txt | epost -db genome -format uid | esummary -db genome | xtract -pattern DocumentSummary -element AssemblyID | epost -db assembly | esummary -db assembly | xtract -pattern DocumentSummary -element Id,'\t',SpeciesName,'\t',Similarity > ./anaconda3/envs/N/database/dark_hyphae/checksim.txt
+awk -F'\t' '($3=="different")' ./anaconda3/envs/N/database/dark_hyphae/checksim.txt > ./anaconda3/envs/N/database/dark_hyphae/dif.txt
+awk '{print $1}' ./anaconda3/envs/N/database/dark_hyphae/dif.txt > ./anaconda3/envs/N/database/dark_hyphae/dif1.txt
+grep -v 'different' ./anaconda3/envs/N/database/dark_hyphae/checksim.txt > ./anaconda3/envs/N/database/dark_hyphae/sim.txt
+awk '{print $1}' ./anaconda3/envs/N/database/dark_hyphae/sim.txt > ./anaconda3/envs/N/database/dark_hyphae/sim1.txt
+
+#Prepared download refseq for genome id that have different similarity of GCA and GCF
+echo "Download sequence from refseq for taxid that have different similarity of GCA and GCF"
+cat ./anaconda3/envs/N/database/dark_hyphae/dif1.txt | epost -db assembly -format uid | esummary -db assembly | xtract -pattern DocumentSummary -block FtpPath -match "@type:Refseq" -element FtpPath | sed 's/$/\//' > ./anaconda3/envs/N/database/dark_hyphae/ftpdirpath.txt
+
+#Prepared download genbank for genome id that have identical similarity of GCA and GCF or don't have GCF
+echo "Download sequence from genbank for taxid that have identical similarity of GCA and GCF or don't have GCF"
+cat ./anaconda3/envs/N/database/dark_hyphae/sim1.txt | epost -db assembly -format uid | esummary -db assembly | xtract -pattern DocumentSummary -block FtpPath -match "@type:Genbank" -element FtpPath | sed 's/$/\//' >> ./anaconda3/envs/N/database/dark_hyphae/ftpdirpath.txt
+
+#convert ftp path and add http
+echo "Convert ftp to http"
+awk 'BEGIN{FS=OFS="/";filesuffix="genomic.fna.gz"}{ftpdir=$0;asm=$10;file=asm"_"filesuffix;print ftpdir""file}' ./anaconda3/envs/N/database/dark_hyphae/ftpdirpath.txt > ./anaconda3/envs/N/database/dark_hyphae/ftpfilepaths.txt
+sed -i 's+ftp://+https://+g' ./anaconda3/envs/N/database/dark_hyphae/ftpfilepaths.txt  
+
+#download genome with wget, concatenate to single fasta and move to N
+mkdir ./anaconda3/envs/N/database/dark_hyphae/Genome 
+echo "Downloading Genome with wget, will took a while..."
+wget -r --no-parent --no-host-directories --cut-dirs=3 --level=1 --input-file=./anaconda3/envs/N/database/dark_hyphae/ftpfilepaths.txt --directory-prefix=Genomic_Only 
+echo "Concatenate and move to N database archive"
+mv ./Genomic_Only ./anaconda3/envs/N/database/dark_hyphae/Genome
+gunzip -r ./anaconda3/envs/N/database/dark_hyphae/Genome/Genomic_Only
+find ./anaconda3/envs/N/database/dark_hyphae/Genome/Genomic_Only -type f -name '*.fna' -exec cat {} + > ./anaconda3/envs/N/database/dark_hyphae/Genome/dark_hyphae_database.fasta
+
+#Indexing the database with minimap2
+echo "Indexing database with minimap2"
+minimap2 -d ./anaconda3/envs/N/database/dark_hyphae/Genome/dark_hyphae_database.mmi ./anaconda3/envs/N/database/dark_hyphae/Genome/dark_hyphae_database.fasta
+echo "Primary indexing dark hyphae database done"
+
+#Finding the overlap in database
+echo "Initiating overlap pipeline"
+echo "Making overlap directory in N"
+echo "Extract FASTA header from dark_hyphae database"
+find ./anaconda3/envs/N/database/dark_hyphae/Genome/Genomic_Only -type f -name '*.fna' -exec ls {} + > ./anaconda3/envs/N/database/dark_hyphae/Genome/genome_dir_list.txt
+mkdir ./anaconda3/envs/N/overlap
+mkdir ./anaconda3/envs/N/overlap/dark_hyphae
+mkdir ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output
+grep '^>' ./anaconda3/envs/N/database/dark_hyphae/Genome/dark_hyphae_database.fasta > ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/all_accession.txt
+echo "Finding overlaped region by aligning each genome on concatenated genome" 
+echo "Extracting the accession number of query and target of overlaped region of each species"
+sp=0
+while read line; do
+	mkdir ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/"$sp"
+	minimap2 -x map-ont ./anaconda3/envs/N/database/dark_hyphae/Genome/*.mmi "$line" > ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/"$sp"/map.paf
+	awk -F' ' '($1!=$6)' ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/"$sp"/map.paf > ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/"$sp"/overlap.paf
+	awk -F' ' '{print$1}' ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/"$sp"/overlap.paf > ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/"$sp"/query.txt
+	awk -F' ' '{print$6}' ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/"$sp"/overlap.paf > ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/"$sp"/target.txt
+	sp=$(( $sp+1 ))
+done < ./anaconda3/envs/N/database/dark_hyphae/Genome/genome_dir_list.txt
+echo "Aligning completed"
+echo "Extracting the accession number of query and target of overlaped region from all species"
+find ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output -type f -name 'query.txt' -exec cat {} + > ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/all_query.txt
+find ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output -type f -name 'target.txt' -exec cat {} + > ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/all_target.txt
+echo "Finding query annotation of the overlaped region by accession"
+while read line; do
+	grep "$line" ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/all_accession.txt
+done < ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/all_query.txt > ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/query_search.txt
+echo "Finding target annotation of the overlaped region by accession"
+while read line; do
+	grep "$line" ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/all_accession.txt
+done < ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/all_target.txt > ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/target_search.txt
+echo "Matching the annotation of query and target of the overlapped region and clear the information"
+paste ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/query_search.txt ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/target_search.txt > ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/final_out.txt
+awk -F' ' '{print$2,$3}' ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/query_search.txt > ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/species_query.txt
+awk -F' ' '{print$2,$3}' ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/target_search.txt > ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/species_target.txt
+paste ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/species_query.txt ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/species_target.txt > ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/overlap_species.txt
+mkdir ./anaconda3/envs/N/overlap/dark_hyphae/final_output
+find ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output -type f -name 'overlap.paf' -exec cat {} + > ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/all_overlap.paf
+echo "Matching annotation with overlaped region information"
+paste ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/overlap_species.txt ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/all_overlap.paf > ./anaconda3/envs/N/overlap/dark_hyphae/final_output/overlap_species_final_same_species.txt 
+echo "Filter only overlap from different species and generate final output"
+awk -F' ' '($1!=$3) || ($2!=$4)' ./anaconda3/envs/N/overlap/dark_hyphae/final_output/overlap_species_final_same_species.txt > ./anaconda3/envs/N/overlap/dark_hyphae/final_output/overlap_species_final_diff_species.txt 
+echo "Overlap pipeline complete"
+
+#mask database
+echo "Initiate masking pipeline"
+echo "Mask database by overlaped region"
+mkdir ./anaconda3/envs/N/overlap/dark_hyphae/mask_database
+awk -F'\t' '{print$8}' ./anaconda3/envs/N/overlap/dark_hyphae/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/dark_hyphae/mask_database/target_overlap1.bed
+awk -F'\t' '{print$10}' ./anaconda3/envs/N/overlap/dark_hyphae/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/dark_hyphae/mask_database/target_overlap2.bed
+awk -F'\t' '{print$11}' ./anaconda3/envs/N/overlap/dark_hyphae/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/dark_hyphae/mask_database/target_overlap3.bed
+awk -F'\t' '{print$3}' ./anaconda3/envs/N/overlap/dark_hyphae/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/dark_hyphae/mask_database/query_overlap1.bed
+awk -F'\t' '{print$5}' ./anaconda3/envs/N/overlap/dark_hyphae/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/dark_hyphae/mask_database/query_overlap2.bed
+awk -F'\t' '{print$6}' ./anaconda3/envs/N/overlap/dark_hyphae/final_output/overlap_species_final_diff_species.txt > ./anaconda3/envs/N/overlap/dark_hyphae/mask_database/query_overlap3.bed
+paste ./anaconda3/envs/N/overlap/dark_hyphae/mask_database/query_overlap1.bed ./anaconda3/envs/N/overlap/dark_hyphae/mask_database/query_overlap2.bed ./anaconda3/envs/N/overlap/dark_hyphae/mask_database/query_overlap3.bed > ./anaconda3/envs/N/overlap/dark_hyphae/mask_database/query_overlap_final.bed
+paste ./anaconda3/envs/N/overlap/dark_hyphae/mask_database/target_overlap1.bed ./anaconda3/envs/N/overlap/dark_hyphae/mask_database/target_overlap2.bed ./anaconda3/envs/N/overlap/dark_hyphae/mask_database/target_overlap3.bed > ./anaconda3/envs/N/overlap/dark_hyphae/mask_database/target_overlap_final.bed
+sort -k1,1 -k2n ./anaconda3/envs/N/overlap/dark_hyphae/mask_database/target_overlap_final.bed > ./anaconda3/envs/N/overlap/dark_hyphae/mask_database/target_overlap_final_sorted.bed
+bedtools merge -i ./anaconda3/envs/N/overlap/dark_hyphae/mask_database/target_overlap_final_sorted.bed > ./anaconda3/envs/N/overlap/dark_hyphae/mask_database/target_overlap_final_merged.bed
+bedtools maskfasta -mc X -fi ./anaconda3/envs/N/database/dark_hyphae/Genome/dark_hyphae_database.fasta -bed ./anaconda3/envs/N/overlap/dark_hyphae/mask_database/target_overlap_final_merged.bed -fo ./anaconda3/envs/N/overlap/dark_hyphae/mask_database/dark_hyphae_masked.fasta
+
+#Clear output in database folder
+echo "Remove unmasked database and all intermediated output and generate final output in ./database/dark_hyphae"
+rm ./anaconda3/envs/N/database/dark_hyphae/Genome/dark_hyphae_database.fasta
+rm ./anaconda3/envs/N/database/dark_hyphae/Genome/dark_hyphae_database.mmi
+mv ./anaconda3/envs/N/database/dark_hyphae/namelist.txt ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/namelist.txt
+rm -r ./anaconda3/envs/N/database/dark_hyphae/*
+mv ./anaconda3/envs/N/overlap/dark_hyphae/mask_database/dark_hyphae_masked.fasta ./anaconda3/envs/N/database/dark_hyphae/dark_hyphae_masked.fasta
+mv ./anaconda3/envs/N/overlap/dark_hyphae/final_output/overlap_species_final_diff_species.txt ./anaconda3/envs/N/database/dark_hyphae/overlap_profile.txt
+cat ./anaconda3/envs/N/overlap/dark_hyphae/mask_database/query_overlap_final.bed > ./anaconda3/envs/N/database/dark_hyphae/overlap_final.bed
+mv ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/all_accession.txt ./anaconda3/envs/N/database/dark_hyphae/all_accession.txt
+mv ./anaconda3/envs/N/overlap/dark_hyphae/intermediate_output/namelist.txt ./anaconda3/envs/N/database/dark_hyphae/namelist.txt
+rm -r ./anaconda3/envs/N/overlap/*
+rm -d ./anaconda3/envs/N/overlap
+
+#Indexing the database with minimap2
+echo "Final Indexing with minimap2"
+minimap2 -d ./anaconda3/envs/N/database/dark_hyphae/dark_hyphae_masked.mmi ./anaconda3/envs/N/database/dark_hyphae/dark_hyphae_masked.fasta
+echo "dark_hyphae database generated"
+echo "All output stored in ./anaconda3/envs/N/database/dark_hyphae"
+echo "Have a nice day"
+re
+}
+
+#mapping read with database
+#Specify input (directory to fastq, database and output folder)
+classify() {
+echo -n "Please specify location of folder that contain fastq -> " 
+read location
+echo -n "Please enter name output folder -> "
+read output_folder 
+echo -n "Please type in database name -> "
+read db_name
+
+#making directory and filtering
+echo "Initiating subtract pipeline"
+echo "making map_out directory in N"
+mkdir ./anaconda3/envs/N/map_out/
+mkdir ./anaconda3/envs/N/map_out/"$db_name"
+mkdir ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"
+echo "Done"
+echo "Concatenate fastq please wait..."
+cat "$location"/*.fastq > ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"/all.fastq
+echo "Done"
+echo "Filtering read length"
+filtlong --min_length 10000 --length_weight 10 ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"/all.fastq > ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"/all_10000_q.fastq
+echo "Done"
+
+#map with SAM output and filter
+echo "Initiating mapping pipeline"
+minimap2 -a -x map-ont ./anaconda3/envs/N/database/"$db_name"/*.mmi ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"/all_10000_q.fastq > ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"/alignment.sam
+grep -v '^@' ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"/alignment.sam > ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"/alignment_c.sam
+awk -F' ' '($2!=4) && ($2!=256) && ($2!=2048) && ($2!=260) && ($2!=2304)' ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"/alignment_c.sam > ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"/alignment_c_f.sam
+awk -F' ' '{print$1,$3}' ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"/alignment_c_f.sam > ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"/read_name_accession_sam.txt
+
+#merge sam and paf
+#sort -k1 -k2 ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"/read_name_accession_paf.txt > ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"/read_name_accession_paf_sorted.txt 
+sort -k1 -k2 ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"/read_name_accession_sam.txt > ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"/read_name_accession_sam_sorted.txt
+#join -1 1 -2 1 ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"/read_name_accession_paf_sorted.txt ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"/read_name_accession_sam_sorted.txt > ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"/read_name_accession_final.txt
+
+#classified the alignment
+echo "Initiating classification pipeline"
+echo "Extracting species name from alignment"
+mkdir ./anaconda3/envs/N/tax_out
+mkdir ./anaconda3/envs/N/tax_out/"$db_name"
+mkdir ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"
+awk -F' ' '{print$2}' ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"/read_name_accession_sam.txt > ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/accession_alignment_final.txt
+awk -F'>' '{print$2}' ./anaconda3/envs/N/database/"$db_name"/all_accession.txt > ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/accession_no_head.txt
+sort ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/accession_alignment_final.txt > ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/accession_alignment_final_sorted.txt
+sort -k1 ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/accession_no_head.txt > ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/accession_no_head_sorted.txt
+join -1 1 -2 1 -t' ' -o 1.2,1.3 ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/accession_no_head_sorted.txt ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/accession_alignment_final_sorted.txt > ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/species_name.txt
+echo "Convert species name into taxid"
+taxonkit name2taxid ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/species_name.txt > ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/species_name_taxid.txt
+awk -F'\t' '($2!="")' ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/species_name_taxid.txt > ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/species_name_taxid_filtered.txt
+awk -F'\t' '($2=="")' ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/species_name_taxid.txt > ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/species_name_no_taxid.txt
+echo "Filter the species can not retrieve taxid for nomenclature correction"
+uniq ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/species_name_no_taxid.txt > ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/species_name_no_taxid_uniq.txt
+while read line; do
+	./anaconda3/envs/N/bin/taxo/taxo -a $line | grep "$line"
+done < ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/species_name_no_taxid.txt > ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/species_name_taxid_corrected.txt
+awk -F' ' '{print$1}' ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/species_name_taxid_corrected.txt > ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/missing_taxid.txt
+sort ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/missing_taxid.txt > ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/missing_taxid_sorted.txt
+uniq -d ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/missing_taxid_sorted.txt > ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/missing_taxid_uniq.txt
+sort ./anaconda3/envs/N/database/"$db_name"/namelist.txt > ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/namelist_sorted.txt
+join -1 1 -2 1 ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/missing_taxid_sorted.txt ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/namelist_sorted.txt > ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/species_no_taxid_taxid.txt
+paste ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/species_name_no_taxid.txt ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/species_no_taxid_taxid.txt > ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/species_no_taxid_taxonkit.txt
+cat ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/species_no_taxid_taxonkit.txt >> ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/species_name_taxid_filtered.txt
+awk -F' ' '{print$3}' ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/species_name_taxid_filtered.txt > ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/all_taxid.txt
+# Input file containing taxids
+input_file="all_taxid.txt"
+
+# Count occurrences of each unique number
+sort ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/"$input_file" | uniq -c > ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/counted_file.txt
+
+# Get the total count of numbers
+total_count=$(awk '{ total += $1 } END { print total }' ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/counted_file.txt)
+
+# Calculate the threshold count (0.15% of total count)
+threshold=$(echo "0.15 * $total_count" | bc | awk '{printf "%.0f", $1}')
+
+# Filter out numbers occurring less than the threshold
+awk '{ if ($1 != "" && $2 != "") { for (i=1; i<=$1; i++) print $2 } }' ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/counted_file.txt | awk -v threshold="$threshold" '$1 >= threshold' > ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/filtered_taxids.txt
+echo "Filtering complete."
+taxonkit lineage ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/filtered_taxids.txt > ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/final_taxonomy.txt
+sed 's/;/\t/g' ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/final_taxonomy.txt > ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/final_taxonomy_biom.txt 
+
+#Clear the output in map_out and tax_out
+echo "Prepared final output"
+mkdir ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"/final_output
+mkdir ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/final_output
+mv ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"/read_name_accession_final.txt ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"/final_output/read_name_accession_final.txt
+mv ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/final_taxonomy_biom.txt ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/final_output/final_taxonomy_biom.txt 
+#rm ./anaconda3/envs/N/tax_out/"$db_name"/"$output_folder"/*
+#rm ./anaconda3/envs/N/map_out/"$db_name"/"$output_folder"/*
+echo "Final alignment output store in map_out final_output folder"
+echo "Final classification output store in tax_out final_output folder"
+echo "Have a nice day"
+re
+
+}
+
+
+#help
+help() {
+echo "a"
+re
+
+}
+
+#return to main
+re() {
+echo "Press Y to back to main menu and N to exit"
+read num
+if [[ "$num" == "Y" ]]; then
+	echo "Please type in your next command if you want more information plaese type --help"
+	read choice
+	main
+elif [[ "num" == "N" ]]; then
+	exit
+fi
+
+}
+
+#main
+main() {
+
+if [[ "$choice" == '--build_in_database' ]]; then
+	build_in_database
+elif [[ "$choice" == '--refseq_database' ]]; then
+	refseq_database
+elif [[ "$choice" == '--custom_database' ]]; then
+	custom_database
+elif [[ "$choice" == '--classify' ]]; then
+	classify
+elif [[ "$choice" == '--dark_hyphae_database' ]]; then
+	dark_hyphae_database	
+elif [[ "$choice" == '--help' ]]; then
+	help
+elif [[ "$choice" != '--build_in_database','--refseq_database','--custom_database','--classify','--help','--dark_hyphae_database' ]]; then
+	echo "wrong command, please try again"
+	exit
+fi
+
+}
+
+#execution steps
+echo "Welcome to N please type in the command"
+echo "[usage : type in --build_in_database, --refseq_database, --custom_database, --classify]"
+read choice
+main
